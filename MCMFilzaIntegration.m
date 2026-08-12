@@ -21,6 +21,8 @@ static NSString *const kMCMServiceDataDirectoryName = @"[MHA-C10] Service Data";
 static NSString *const kMCMSystemDataDirectoryName = @"[MHA-C12] System Data";
 static NSString *const kMCMSystemGroupsDirectoryName = @"[MHA-C13] System Groups";
 static NSString *const kMCMProtectedDataDirectoryName = @"[MHA-C15] Protected Data";
+static NSString *const kMCMSafariTabsDirectoryName = @"[MHA-C2] Safari Tabs";
+static NSString *const kMCMSafariIdentifier = @"com.apple.mobilesafari";
 static NSString *const kMCMAdditionalLocationsDirectoryName =
     @"[MHA-C13 Scoped] Additional Locations";
 static NSString *const kMCMExperimentalDirectoryName =
@@ -222,6 +224,58 @@ static void MCMInstallLink(NSString *directory, NSString *identifier,
         NSLog(@"[MCMFilza] symlink failed id=%@ errno=%d", identifier, errno);
 }
 
+
+static void MCMInstallSafariTabsShortcut(NSFileManager *manager, NSString *directory)
+{
+    NSString *detail = nil;
+    NSString *container = MCMActivate(2, kMCMSafariIdentifier, NO, &detail);
+    if (!container) {
+        NSLog(@"[SafariTabs] activation failed: %@", detail);
+        return;
+    }
+    NSString *safari = [container stringByAppendingPathComponent:@"Library/Safari"];
+    NSString *database = [safari stringByAppendingPathComponent:@"SafariTabs.db"];
+    BOOL isDirectory = NO;
+    if (![manager fileExistsAtPath:safari isDirectory:&isDirectory] || !isDirectory) {
+        NSLog(@"[SafariTabs] directory unavailable: %@", safari);
+        return;
+    }
+    NSString *link = [directory stringByAppendingPathComponent:@"Safari"];
+    struct stat status = {0};
+    if (lstat(link.fileSystemRepresentation, &status) == 0) {
+        if (!S_ISLNK(status.st_mode)) {
+            NSLog(@"[SafariTabs] shortcut path is occupied by a non-link: %@", link);
+            return;
+        }
+        if (unlink(link.fileSystemRepresentation) != 0) {
+            NSLog(@"[SafariTabs] stale symlink removal failed errno=%d", errno);
+            return;
+        }
+    }
+    if (symlink(safari.fileSystemRepresentation, link.fileSystemRepresentation) != 0) {
+        NSLog(@"[SafariTabs] symlink failed errno=%d", errno);
+        return;
+    }
+    int descriptor = open(database.fileSystemRepresentation,
+                          O_RDWR | O_CLOEXEC | O_NOFOLLOW);
+    int writeError = descriptor >= 0 ? 0 : errno;
+    if (descriptor >= 0) close(descriptor);
+    BOOL directoryWritable = access(safari.fileSystemRepresentation, W_OK) == 0;
+    NSDictionary *result = @{
+        @"ResolvedContainer": container,
+        @"Database": database,
+        @"DatabaseReadWriteOpen": @(descriptor >= 0),
+        @"DatabaseOpenErrno": @(writeError),
+        @"DirectoryWritable": @(directoryWritable),
+    };
+    [result writeToFile:[directory stringByAppendingPathComponent:@"Access Status.plist"]
+             atomically:YES];
+    NSString *readme = @"Open Safari/SafariTabs.db. The current UUID is resolved dynamically. Close Safari first and back up SafariTabs.db with its -wal and -shm files before editing.";
+    [readme writeToFile:[directory stringByAppendingPathComponent:@"README.txt"]
+              atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    NSLog(@"[SafariTabs] ready database=%@ rw=%d directory_writable=%d errno=%d",
+          database, descriptor >= 0, directoryWritable, writeError);
+}
 static NSString *MCMDirectIdentifier(NSString *containerPath, NSString *fallback)
 {
     NSString *metadataPath = [containerPath stringByAppendingPathComponent:
@@ -986,6 +1040,8 @@ static void MCMWriteAccessMap(NSFileManager *manager, NSString *root)
     NSArray<NSDictionary<NSString *, NSString *> *> *categories = @[
         @{@"Name": kMCMAppDataDirectoryName,
           @"Primitive": @"MHA-MCM class 2 application-data lookup and sandbox extension"},
+        @{@"Name": kMCMSafariTabsDirectoryName,
+          @"Primitive": @"MHA-MCM class 2 Safari lookup with a direct Library/Safari shortcut"},
         @{@"Name": kMCMAppGroupsDirectoryName,
           @"Primitive": @"MHA-MCM class 7 app-group lookup and sandbox extension"},
         @{@"Name": kMCMExtensionDataDirectoryName,
@@ -1107,6 +1163,8 @@ void MCMFilzaStart(void)
             [fm removeItemAtPath:legacyRoot error:nil];
         MCMMigrateLegacyTopLevelNames(fm, root);
         NSString *apps = [root stringByAppendingPathComponent:kMCMAppDataDirectoryName];
+        NSString *safariTabs = [root
+            stringByAppendingPathComponent:kMCMSafariTabsDirectoryName];
         NSString *groups = [root stringByAppendingPathComponent:kMCMAppGroupsDirectoryName];
         NSString *extensions = [root
             stringByAppendingPathComponent:kMCMExtensionDataDirectoryName];
@@ -1125,7 +1183,7 @@ void MCMFilzaStart(void)
             stringByAppendingPathComponent:kMCMExperimentalDirectoryName];
         NSString *filesTraversal = [root stringByAppendingPathComponent:@"Files Traversal"];
         [fm removeItemAtPath:filesTraversal error:nil];
-        for (NSString *directory in @[root, apps, groups, extensions, vpnData,
+        for (NSString *directory in @[root, apps, safariTabs, groups, extensions, vpnData,
                                       serviceData, systemData, systemGroups,
                                       protectedData, additionalLocations,
                                       experimental])
@@ -1143,6 +1201,7 @@ void MCMFilzaStart(void)
             if ([value isKindOfClass:NSString.class] && MCMSafeIdentifier(value)) [appIdentifiers addObject:value];
         for (NSString *identifier in appIdentifiers)
             MCMInstallLink(apps, identifier, 2, NO);
+        MCMInstallSafariTabsShortcut(fm, safariTabs);
         NSMutableOrderedSet *groupIdentifiers = [NSMutableOrderedSet orderedSetWithArray:
             MCMDynamicIdentifiers(7)];
         for (id value in [custom[@"AppGroups"] isKindOfClass:NSArray.class] ? custom[@"AppGroups"] : @[])

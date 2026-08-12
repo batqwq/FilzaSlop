@@ -44,6 +44,9 @@ FilzaJailedDS fork with:
 # Safari app data
 /private/var/mobile/Containers/Data/Application/<Safari-app-UUID>/
 
+# Direct in-app shortcut (UUID resolved dynamically)
+Device Storage/[MHA-C2] Safari Tabs/Safari/SafariTabs.db
+
 # Safari shared data: group.com.apple.safari
 /private/var/mobile/Containers/Shared/AppGroup/<Safari-group-UUID>/
 ```
