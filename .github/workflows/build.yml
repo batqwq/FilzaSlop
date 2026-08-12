@@ -28,6 +28,9 @@ jobs:
           git clone --recursive --depth 1 https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
           echo "THEOS=$RUNNER_TEMP/theos" >> "$GITHUB_ENV"
 
+      - name: Install signing tool
+        run: brew install ldid
+
       - name: Build package
         run: |
           make clean
